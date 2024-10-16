@@ -1,0 +1,757 @@
+%% NOS CHILL MAIN
+% File to perform the main iterative calculations for the refrigeration
+% optimization effort - minimize tchill with constraints on power input
+% this is a tool to design the heat transfer and thermodynamic behaviour of
+% a NOS chilling system. Due consideration must be given to general system
+% design, and these inputs can be iterated within this program to find the
+% optimal system
+
+% refrigeration cycles occur at constant pressures 
+% 1-2: isentropic compression from Pevap to Pcond
+% 2-3: isobaric heat rejection in condenser to saturated liquid at Pcond
+% 3-4: isenthalpic throttle from Pcond to Pevap
+% 4-1: isobaric heat absorption in evaporator to saturated vapour at Pevap
+
+%% TO ASK
+% how to deal with flow of two phase refrigerant
+    % particularly pressure drop, calculating heat transfer coefficiencts
+    % how to deal with this across the expansion valve
+% how to deal with convection from two phase substance
+
+% he says there are empirical correlations, or EES might have a thing
+% split it up into convection from the liquid and convection from vapour
+
+
+%% Inputs, Ambient and Target Conditions
+% Tamb = ambient temperature, starting NOS temperature
+% Ttarget = desired NOS temperature, saturation conditions
+% Vnos = volume of the tank, assume filled with NOS
+% mnos = mass of nitrous in the tank
+
+% Modules
+    % CoolProp OR RefProp (NIST based, purhcase required)
+
+%% Optimization Goals and Ouputs
+% t = time of refrigeration (minimize)
+% W = power draw (minimize)
+
+% Variables
+    % mdotRef = refrigerant mass flow rate
+    % Dpipe = pipe diameter for refrigerant
+    % Tevap1 = first evaporator temperature for stage 1
+    % Tevap2 is defined by being below the final desired NOS temperature
+    % Tcond1 = first condenser temperature for stage 1
+    % Tcond2 is defined by being above the ambient temperature
+
+% Plots
+
+
+%% Design Requirements
+% Heat transfer mechanism
+    % produce the most effective heat transfer mechanism (high rate)
+    % look at cooling channel design (areas, flow rates, etc)
+    % look at insulation design in the outer shell
+    % look at transient heat transfer, flowing fluids, state change, etc.
+% Thermodynamic efficiency
+    % design the most efficienct thermodyanmic cycle for the working fluid
+    % dual stage cycle may be needed for low temperature
+    % select fluids with appropriate bp temperature for operating range
+% Material selection
+    % select appropriate tube materials, sizes, etc
+% NOS thermodynamic behaviour
+    % transient behaviour of chilling nitrous oxide
+% Power system bahviour, compatibility, etc.
+    % power requirements, power supply design, etc
+
+
+%% Heat Transfer Analysis
+% have a working fluid refrigerant, which is an design variable
+% heat absorption occurs at the evaporator temperature
+    % here, phase change of the refrigerant from liquid to vapour occurs
+% heat rejection occurs at the condenser temperature
+    % here, phase change of the refrigerant from vapour to liquid occurs
+% mass flow rate should match the cycle with the rate of heat transfer
+% in this case, working temperatures are optimization variables
+% mass flow rate is a result of the heat transfer calculation
+
+% EVAPORATION - time stepped
+% Start condition: refrigerant evaporator pressure
+    % refrigerant at saturated liquid condition, know T12
+% Process: latent heat absorption and evaporation at constant pressure
+    % adjust for temperature by calling properties in time stepping
+% End condition: refrigerant evaporator pressure
+    % refrigerant at superheated vapour condition, T changed
+% Calculated: total heat absorption by refrigerant
+% Back calculated: rate of heat transfer through all systems
+    % have a total heat transferred in one pass
+    % need to calculate change in NOS temperature with transient heat flux
+    % NOS final temperature is iteration RESULT (iterative solution)
+    % assume a final temperature of NOS in one pass
+    % calculate heat transfer to working fluid in one pass by iterating
+    % several timesteps backward from this temperature
+    % remember the temperature adjustment of teh refrigerant with each time
+    % step, accounted for with the mass flow rate
+    % if it does not match the energy for the evaporation process, repeat
+% Result: final temperature of NOS after one pass of refrigerant
+
+
+% COMPRESSOR - single power calculation
+% optimization variables Pevap and Pcond
+% can directly calculate work by the compressor with refrigerant states
+% account for losses here
+
+
+% CONDENSATION - time stepped
+% Start condition: refrigerant condenser temperature
+    % refrigerant at liquid-vap or vapour condition depending on cycle
+% Process: latent heat rejection and condensation at constant temperature
+% End condition: refrigerant condenser temperature
+    % refrigerant at saturated? state
+% Calculated: total heat rejection by refrigerant
+% Back calculated: system requirements (length, flow rate, etc. to achieve)
+    % have total heat trasnferred in one pass
+    % calculate transient heat flux to environment
+    % calculate required length, etc for this
+    % no converging iteration required, only time stepping
+% Result: system design requirements after one pass of refrigerant
+
+
+% EXPANSION VALVE - single calculation for Cv
+% optimization variables Pevap and Pcond
+% mass flow rate known
+% calculate required valve Cv to achieve this pressure drop
+% assume losses here deviating from (will affect the 4-1 curve slope)
+% make a constant loss assumption so states are all known, simplify it
+
+
+% OVERALL - loop stepped
+% based on optimization variables Pevap, Pcond, process cycle is known
+% W for compressor is directly calculated
+% repeat loops of evaporation and condensation until temp is reached
+% try to minimize time to cool
+% take some overall optimization function that combines W and t in a
+% meaningful way to minimize and give the best design
+
+
+% DEVIATONS
+% flow losses create a pressure drop in the system
+% creates deviations in heat transfer properties of the working fluid
+% needs to be augmented with the time stepping
+% flow losses will be created in the valve and compressor
+% this will further mess everything up
+
+
+%% Project Outcomes
+% Optimization model for working pressures
+% Optimization tests (manually) for heat exchanger sizing, design
+% Optimization tests (manually) for working fluid, stages
+% Material selection for heat exchanger, seals, etc.
+% Pressure sims for tanks, piping, etc.
+% P&ID of heat exchanger system
+% Cost analysis of system
+% Power analysis of system
+% CAD of full design including tanks and plumbing
+% Full heat transfer analysis of final system and insulation
+
+
+%% FUNCTIONS
+%% NOS CHILL THERMODYNAMICS
+% File including functions related to instantaneous thermodynamic relations
+% Tnos = NOS temperature
+% Vnos = NOS tank volume
+% Lnos = NOS tank length
+% mnos = NOS mass
+
+%% NOS Level
+% liquid level of nitrous at given state
+function [Lliq,Lvap] = NOSLevel(Tnos,Vnos,mnos,Lnos,Dtanki)
+    rhovap = py.CoolProp.CoolProp.PropsSI('D','T',Tnos,'Q',1,'CO2');
+    x = py.CoolProp.CoolProp.PropsSI('Q','T',Tnos,'D',mnos/Vnos,'CO2');
+    mvap = x*mnos;
+    Vvap = mvap/rhovap;
+    Lvap = Vvap/(pi/4*(Dtanki^2));
+    Lliq = Lnos -Lvap;
+end
+
+%% Exchanger Level
+% length of heat exchanger immersed in liquid and vapour
+function [Lpliq,Lpvap] = PipeLevel(Lpipe,Hpipe,Lliq)
+    % compute the pipe length to height ratio
+    LtoH = Lpipe/Hpipe;
+
+    % compute the length immersed in liquid and vapour
+    Lpliq = Lliq*LtoH;
+    Lpvap = Lpipe - Lpliq;
+end
+
+%% Refrigeration Cycle States - UPDATE WITH NON-IDEALITIES
+% computes states of the refrigeration cycle given input pressures
+function [s,h,T] = RefrigerationCycle(Pevap,Pcond)
+    % state 2 - pre-throttle
+    T2 = py.CoolProp.CoolProp.PropsSI('T','P',Pcond,'Q',0,'R134a');
+    h2 = py.CoolProp.CoolProp.PropsSI('H','P',Pcond,'Q',0,'R134a');
+    s2 = py.CoolProp.CoolProp.PropsSI('S','P',Pcond,'Q',0,'R134a');
+
+    % state 3 - pre-evaporator
+    h3 = h2;
+    T3 = py.CoolProp.CoolProp.PropsSI('T','P',Pevap,'H',h3,'R134a');
+    s3 = py.CoolProp.CoolProp.PropsSI('S','P',Pevap,'H',h3,'R134a');  
+
+    % state 4 - post-evaporator
+    T4 = py.CoolProp.CoolProp.PropsSI('T','P',Pevap,'Q',1,'R134a');
+    h4 = py.CoolProp.CoolProp.PropsSI('H','P',Pevap,'Q',1,'R134a');
+    s4 = py.CoolProp.CoolProp.PropsSI('S','P',Pevap,'Q',1,'R134a');    
+
+    % state 1 - post-compressor
+    s1 = s4;
+    T1 = py.CoolProp.CoolProp.PropsSI('T','P',Pcond,'S',s1,'R134a');
+    h1 = py.CoolProp.CoolProp.PropsSI('H','P',Pcond,'S',s1,'R134a');
+
+    % states
+    s = [s1,s2,s3,s4];
+    h = [h1,h2,h3,h4];
+    T = [T1,T2,T3,T4];
+end
+
+%% NOS CHILL HEAT TRANSFER
+% File including all functions related to instantaneous heat transfer rates
+% assume perfectly insulated top and bottom of tank
+
+%% NOS Convection Pipe
+% convection with two phase NOS at instantaneous temperature, proportion
+% assume saturation conditions maintained, P and T change simultaneously
+function [Rnosliq,Rnosvap] = NOSConvectionPipe(Tnos,TpipeO,Lpliq,Lpvap,DpipeO)
+    % compute film temperature guess, not great because we dont know TpipeO
+    Tf = (Tnos + TpipeO)/2;
+
+    % compute Ra and Pr for free convection, use D
+    % liquid properties
+    rho = py.CoolProp.CoolProp.PropsSI('D', 'T', Tf, 'Q', 0, 'CO2');         % Density [kg/m^3]
+    mu = py.CoolProp.CoolProp.PropsSI('V', 'T', Tf, 'Q', 0, 'CO2');          % Dynamic viscosity [Pa.s]
+    kliq = py.CoolProp.CoolProp.PropsSI('L', 'T', Tf, 'Q', 0, 'CO2');           % Thermal conductivity [W/m.K]
+    cp = py.CoolProp.CoolProp.PropsSI('C', 'T', Tf, 'Q', 0, 'CO2');          % Specific heat capacity [J/kg.K]
+    
+    % Calculating derived properties
+    nu = mu / rho;                                        % Kinematic viscosity [m^2/s]
+    beta = py.CoolProp.CoolProp.PropsSI('isobaric_expansion_coefficient', 'T', Tf, 'Q', 0, 'CO2');  % Volumetric thermal expansion coefficient [1/K]
+    alpha = kliq / (rho * cp);                               % Thermal diffusivity [m^2/s]
+    g = 9.81;
+
+    % Rayleight and Prandtl numbers
+    Raliq = g*beta*(Tnos-TpipeO)*(DpipeO^3)/(nu*alpha);
+    Prliq = mu*cp/kliq;
+
+    % vapour properties
+    rho = py.CoolProp.CoolProp.PropsSI('D', 'T', Tf, 'Q', 1, 'CO2');         % Density [kg/m^3]
+    mu = py.CoolProp.CoolProp.PropsSI('V', 'T', Tf, 'Q', 1, 'CO2');          % Dynamic viscosity [Pa.s]
+    kvap = py.CoolProp.CoolProp.PropsSI('L', 'T', Tf, 'Q', 1, 'CO2');           % Thermal conductivity [W/m.K]
+    cp = py.CoolProp.CoolProp.PropsSI('C', 'T', Tf, 'Q', 1, 'CO2');          % Specific heat capacity [J/kg.K]
+    
+    % Calculating derived properties
+    nu = mu / rho;                                        % Kinematic viscosity [m^2/s]
+    beta = py.CoolProp.CoolProp.PropsSI('isobaric_expansion_coefficient', 'T', Tf, 'Q', 1, 'CO2');  % Volumetric thermal expansion coefficient [1/K]
+    alpha = kvap / (rho * cp);                               % Thermal diffusivity [m^2/s]
+    g = 9.81;
+
+    % Rayleight and Prandtl numbers
+    Ravap = g*beta*(Tnos-TpipeO)*(DpipeO^3)/(nu*alpha);
+    Prvap = mu*cp/kvap;
+
+    % compute Nu using empirical correlation (horizontal pipe free)
+    Nuliq = (0.6 + (0.387*(Raliq^(1/6)))/(1+(0.559/Prliq)^(9/16))^(8/27))^2;
+    Nuvap = (0.6 + (0.387*(Ravap^(1/6)))/(1+(0.559/Prvap)^(9/16))^(8/27))^2;
+
+    % compute h from Nu for liq and vap
+    hliq = Nuliq*kliq/DpipeO;
+    hvap = Nuvap*kvap/DpipeO;
+
+    % compute relevant heat transfer areas for convection to pipe
+    Apliq = Lpliq*pi*DpipeO;
+    Apvap = Lpvap*pi*DpipeO;
+
+    % compute liquid and vapour resistance coefficients of convection
+    Rnosliq = 1/(hliq*Apliq);
+    Rnosvap = 1/(hvap*Apvap);
+end
+
+%% Piping Conduction
+% conduction with instantaneous piping resistance
+function Rpipe = PipingConduction(Lpipe,DpipeO,Dpipei,kpipe)
+    % compute required pipe geometries
+    Rpipe2 = DpipeO/2;
+    Rpipe1 = Dpipei/2;
+
+    % compute 1D pipe resistance
+    Rpipe = log(Rpipe2/Rpipe1)/(2*pi*Lpipe*kpipe);
+end
+
+%% Refrigerant Convection - UPDATE WITH PRESSURE DROP ACCOUNTED FOR, TRANSIENT NUSSELT
+% flowing refrigerant convection from inner wall temperature
+% design for T-s diagram optimum for typical refrigeration system
+% may need dual stage cooling with low temp refrigerant
+function Rref = RefrigerantConvection(Ti,To,si,so,Lpipe,Dpipei,mdot)
+    % compute film temperature guess, not great because we dont know TpipeO
+    Tavg = (Ti+To)/2;
+    savg = (si+so)/2;
+
+    % compute Ra and Pr for free convection, use D
+    % liquid properties
+    mu = py.CoolProp.CoolProp.PropsSI('V', 'T', Tavg, 'S', savg, 'R134a');          % Dynamic viscosity [Pa.s]
+    k = py.CoolProp.CoolProp.PropsSI('L', 'T', Tavg, 'S', savg, 'R134a');           % Thermal conductivity [W/m.K]
+    cp = py.CoolProp.CoolProp.PropsSI('C', 'T', Tavg, 'S', savg, 'R134a');          % Specific heat capacity [J/kg.K]
+
+    % Reynolds and Prandtl numbers
+    Pr = mu*cp/k;
+    Re = mdot*Dpipei/(pi*(Dpipei^2)/4*mu);
+
+    % compute Nu using empirical correlation (internal flow, Ts constant)
+    n = 0.4; %heating
+    if Re<2300
+        Nu = 3.66;
+    %elseif Re>=10000
+    else
+        Nu = 0.023*(Re^(4/5))*(Pr^n);
+    end
+
+    % compute h from Nu
+    href = Nu*k/Dpipei;
+
+    % compute relevant heat transfer areas for convection to pipe
+    Aref = Lpipe*pi*Dpipei;
+
+    % compute resistance coefficient of convection
+    Rref = 1/(href*Aref);
+end
+
+%% NOS Convection Tank - ASSUME THIN BL, UPDATE
+% convection with two phase NOS at instantaneous temperature, proportion
+% assume saturation conditions maintained, P and T change simultaneously
+function [Rnosliq,Rnosvap] = NOSConvectionTank(Tnos,Ttanki,Lpliq,Lpvap,Dtanki)
+    % compute film temperature guess, not great because we dont know TpipeO
+    Tf = (Tnos + Ttanki)/2;
+
+    % compute Ra and Pr for free convection, use D
+    % liquid properties
+    rho = py.CoolProp.CoolProp.PropsSI('D', 'T', Tf, 'Q', 0, 'CO2');         % Density [kg/m^3]
+    mu = py.CoolProp.CoolProp.PropsSI('V', 'T', Tf, 'Q', 0, 'CO2');          % Dynamic viscosity [Pa.s]
+    kliq = py.CoolProp.CoolProp.PropsSI('L', 'T', Tf, 'Q', 0, 'CO2');           % Thermal conductivity [W/m.K]
+    cp = py.CoolProp.CoolProp.PropsSI('C', 'T', Tf, 'Q', 0, 'CO2');          % Specific heat capacity [J/kg.K]
+    
+    % Calculating derived properties
+    nu = mu / rho;                                        % Kinematic viscosity [m^2/s]
+    beta = py.CoolProp.CoolProp.PropsSI('isobaric_expansion_coefficient', 'T', Tf, 'Q', 0, 'CO2');  % Volumetric thermal expansion coefficient [1/K]
+    alpha = kliq / (rho * cp);                               % Thermal diffusivity [m^2/s]
+    g = 9.81;
+
+    % Rayleight and Prandtl numbers
+    Raliq = g*beta*(Ttanki-Tnos)*(Dtanki^3)/(nu*alpha);
+    Prliq = mu*cp/kliq;
+
+    % vapour properties
+    rho = py.CoolProp.CoolProp.PropsSI('D', 'T', Tf, 'Q', 1, 'CO2');         % Density [kg/m^3]
+    mu = py.CoolProp.CoolProp.PropsSI('V', 'T', Tf, 'Q', 1, 'CO2');          % Dynamic viscosity [Pa.s]
+    kvap = py.CoolProp.CoolProp.PropsSI('L', 'T', Tf, 'Q', 1, 'CO2');           % Thermal conductivity [W/m.K]
+    cp = py.CoolProp.CoolProp.PropsSI('C', 'T', Tf, 'Q', 1, 'CO2');          % Specific heat capacity [J/kg.K]
+    
+    % Calculating derived properties
+    nu = mu / rho;                                        % Kinematic viscosity [m^2/s]
+    beta = py.CoolProp.CoolProp.PropsSI('isobaric_expansion_coefficient', 'T', Tf, 'Q', 1, 'CO2');  % Volumetric thermal expansion coefficient [1/K]
+    alpha = kvap / (rho * cp);                               % Thermal diffusivity [m^2/s]
+    g = 9.81;
+
+    % Rayleight and Prandtl numbers
+    Ravap = g*beta*(Ttanki-Tnos)*(Dtanki^3)/(nu*alpha);
+    Prvap = mu*cp/kvap;
+
+    % compute Nu using empirical correlation (vertical pipe free) UPDATE
+    Nuliq = (0.825 + (0.387*(Raliq^(1/6)))/(1+(0.492/Prliq)^(9/16))^(8/27))^2;
+    Nuvap = (0.825 + (0.387*(Ravap^(1/6)))/(1+(0.492/Prvap)^(9/16))^(8/27))^2;
+
+    % compute h from Nu for liq and vap
+    hliq = Nuliq*kliq/Dtanki;
+    hvap = Nuvap*kvap/Dtanki;
+
+    % compute relevant heat transfer areas for convection to pipe
+    Apliq = Lpliq*pi*Dtanki;
+    Apvap = Lpvap*pi*Dtanki;
+
+    % compute liquid and vapour resistance coefficients of convection
+    Rnosliq = 1/(hliq*Apliq);
+    Rnosvap = 1/(hvap*Apvap);
+end
+
+%% Tank Conduction
+% conduction with instantaneous tank temperature gradient
+function Rtank = TankConduction(Lnos,DtankO,Dtanki,ktank)
+    % compute required pipe geometries
+    Rtank2 = DtankO/2;
+    Rtank1 = Dtanki/2;
+
+    % compute 1D cylinder resistance
+    Rtank = log(Rtank2/Rtank1)/(2*pi*Lnos*ktank);
+end
+
+%% Interspace Convection - ASSUME THIN BL, UPDATE
+% assume stationary environment fluid, forced by fan or natural
+function Rair = InterspaceConvectionTank(Tair,TtankO,Ltank,DtankO)
+    % compute film temperature guess, not great because we dont know TpipeO
+    Tf = (Tair + TtankO)/2;
+    P = 101325;
+
+    % compute Ra and Pr for free convection, use D
+    % liquid properties
+    rho = py.CoolProp.CoolProp.PropsSI('D', 'T', Tf, 'P', P, 'Air');         % Density [kg/m^3]
+    mu = py.CoolProp.CoolProp.PropsSI('V', 'T', Tf, 'P', P, 'Air');          % Dynamic viscosity [Pa.s]
+    k = py.CoolProp.CoolProp.PropsSI('L', 'T', Tf, 'P', P, 'Air');           % Thermal conductivity [W/m.K]
+    cp = py.CoolProp.CoolProp.PropsSI('C', 'T', Tf, 'P', P, 'Air');          % Specific heat capacity [J/kg.K]
+    
+    % Calculating derived properties
+    nu = mu / rho;                                        % Kinematic viscosity [m^2/s]
+    beta = py.CoolProp.CoolProp.PropsSI('isobaric_expansion_coefficient', 'T', Tf, 'P', P, 'Air');  % Volumetric thermal expansion coefficient [1/K]
+    alpha = k / (rho * cp);                               % Thermal diffusivity [m^2/s]
+    g = 9.81;
+
+    % Rayleight and Prandtl numbers
+    Ra = g*beta*(Tair-TtankO)*(DtankO^3)/(nu*alpha);
+    Pr = mu*cp/k;
+
+    % compute Nu using empirical correlation (vertical cyl free) UPDATE
+    Nu = (0.825 + (0.387*(Ra^(1/6)))/(1+(0.492/Pr)^(9/16))^(8/27))^2;
+
+    % compute h from Nu
+    hair = Nu*k/DtankO;
+
+    % compute relevant heat transfer area for convection to tank
+    Aair = Ltank*pi*DtankO;
+
+    % compute resistance coefficient of convection
+    Rair = 1/(hair*Aair);
+end
+
+%% Interspace Convection
+% assume stationary environment fluid, forced by fan or natural
+function Rair = InterspaceConvectionIns(Tair,Tinsi,Lins,Ainsside)
+    % compute film temperature guess, not great because we dont know TpipeO
+    Tf = (Tair + Tinsi)/2;
+    P = 101325;
+
+    % compute Ra and Pr for free convection, use D
+    % liquid properties
+    rho = py.CoolProp.CoolProp.PropsSI('D', 'T', Tf, 'P', P, 'Air');         % Density [kg/m^3]
+    mu = py.CoolProp.CoolProp.PropsSI('V', 'T', Tf, 'P', P, 'Air');          % Dynamic viscosity [Pa.s]
+    k = py.CoolProp.CoolProp.PropsSI('L', 'T', Tf, 'P', P, 'Air');           % Thermal conductivity [W/m.K]
+    cp = py.CoolProp.CoolProp.PropsSI('C', 'T', Tf, 'P', P, 'Air');          % Specific heat capacity [J/kg.K]
+    
+    % Calculating derived properties
+    nu = mu / rho;                                        % Kinematic viscosity [m^2/s]
+    beta = py.CoolProp.CoolProp.PropsSI('isobaric_expansion_coefficient', 'T', Tf, 'P', P, 'Air');  % Volumetric thermal expansion coefficient [1/K]
+    alpha = k / (rho * cp);                               % Thermal diffusivity [m^2/s]
+    g = 9.81;
+
+    % Rayleight and Prandtl numbers
+    Ra = g*beta*(Tinsi-Tair)*(Lins^3)/(nu*alpha);
+    Pr = mu*cp/k;
+
+    % compute Nu using empirical correlation (vertical wall free)
+    Nu = (0.825 + (0.387*(Ra^(1/6)))/(1+(0.492/Pr)^(9/16))^(8/27))^2;
+
+    % compute h from Nu
+    hair = Nu*k/Lins;
+
+    % compute resistance coefficient of convection
+    Rair = 1/(hair*Ainsside*4);
+end
+
+%% Insulation Conduction
+% assume stationary environment fluid, forced by fan or natural
+function Rins = InsulationConduction(Lins,Ainsside,kins)
+    Rinssides = Lins/(kins*Ainsside*4);
+
+    Rins = Rinssides;
+end
+
+%% Ambient Convection
+% assume stationary environment fluid
+function Ramb = AmbientConvection(Tamb,TinsO,Lins,Ainsside)
+    % compute film temperature guess, not great because we dont know TpipeO
+    Tf = (Tamb + TinsO)/2;
+    P = 101325;
+
+    % compute Ra and Pr for free convection, use D
+    % liquid properties
+    rho = py.CoolProp.CoolProp.PropsSI('D', 'T', Tf, 'P', P, 'Air');         % Density [kg/m^3]
+    mu = py.CoolProp.CoolProp.PropsSI('V', 'T', Tf, 'P', P, 'Air');          % Dynamic viscosity [Pa.s]
+    k = py.CoolProp.CoolProp.PropsSI('L', 'T', Tf, 'P', P, 'Air');           % Thermal conductivity [W/m.K]
+    cp = py.CoolProp.CoolProp.PropsSI('C', 'T', Tf, 'P', P, 'Air');          % Specific heat capacity [J/kg.K]
+    
+    % Calculating derived properties
+    nu = mu / rho;                                        % Kinematic viscosity [m^2/s]
+    beta = py.CoolProp.CoolProp.PropsSI('isobaric_expansion_coefficient', 'T', Tf, 'P', P, 'Air');  % Volumetric thermal expansion coefficient [1/K]
+    alpha = k / (rho * cp);                               % Thermal diffusivity [m^2/s]
+    g = 9.81;
+
+    % Rayleight and Prandtl numbers
+    Ra = g*beta*(Tamb-TinsO)*(Lins^3)/(nu*alpha);
+    Pr = mu*cp/k;
+
+    % compute Nu using empirical correlation (vertical wall free)
+    Nu = (0.825 + (0.387*(Ra^(1/6)))/(1+(0.492/Pr)^(9/16))^(8/27))^2;
+
+    % compute h from Nu
+    hair = Nu*k/Lins;
+
+    % compute resistance coefficient of convection
+    Ramb = 1/(hair*Ainsside*4);
+end
+
+%% Heat From NOS
+% % function to solve Ts for pipe flow
+% function q = HeatFlow(To,Ti,Ts,Rref)
+%     Tlm = ((To-Ts)-(Ti-Ts))/log((To-Ts)/(Ti-Ts));
+%     q = Tlm/Rref;
+% end
+
+% solve for Ttest = Tnos to get q out of NOS
+function Ttest = HeatOut(q,Ti,To,si,so,Tnos,Vnos,mnos,Lnos,Dtanki,Lpipe,Hpipe,Dpipei,DpipeO,kpipe,mdot)
+    % compute levels
+    [Lliq,Lvap] = NOSLevel(Tnos,Vnos,mnos,Lnos,Dtanki);
+    [Lpliq,Lpvap] = PipeLevel(Lpipe,Hpipe,Lliq);
+    Tavg = (Ti+To)/2;
+    %disp(Tavg)
+
+    % individual temperatures with qguess, for Ttest (NOS)
+    % refrigerant to inner wall
+    Rref = RefrigerantConvection(Ti,To,si,so,Lpipe,Dpipei,mdot);
+    % tol = 0.001;
+    % toln = tol + 1;
+    % a = Ti;
+    % b = Tnos;
+    % while abs(toln) > tol
+    %     c = (a + b)/2;
+    %     Ts = c;
+    %     if (HeatFlow(To,Ti,c,Rref)-q)*(HeatFlow(To,Ti,a,Rref)-q) < 0
+    %         b = c;
+    %     else
+    %         a = c;
+    %     end
+    %     toln = (HeatFlow(To,Ti,c,Rref)-q);
+    % end
+    % Tpipei = Ts;
+    Tpipei = Tavg + q*Rref;
+    %disp(Tpipei)
+
+    % inner wall to outer wall
+    Rpipe = PipingConduction(Lpipe,DpipeO,Dpipei,kpipe);
+    TpipeO = q*Rpipe + Tpipei;
+    %disp(TpipeO)
+
+    % outer wall to NOS
+    [Rliqpipe,Rvappipe] = NOSConvectionPipe(Tnos,TpipeO,Lpliq,Lpvap,DpipeO);
+    Rnos = 1/(1/Rliqpipe+1/Rvappipe);
+    Ttest = q*Rnos + TpipeO;
+    %disp(Ttest)
+end
+
+%% Heat From Ambient
+% neglect radiation
+function Ttest = HeatIn(q,Tnos,Vnos,mnos,Lnos,Dtanki,Tamb,Lins,Ainsside,kins,Ltank,DtankO,ktank)
+    % compute levels
+    [Lliq,Lvap] = NOSLevel(Tnos,Vnos,mnos,Lnos,Dtanki);
+
+    % individual temperatures with qguess, for Ttest (NOS)
+    % ambient to outer insulation
+    tol = 0.001;
+    toln = tol + 1;
+    a = Tnos;
+    b = Tamb;
+    while abs(toln) > tol
+        c = (a + b)/2;
+        TinsO = c;
+        Rambc = AmbientConvection(Tamb,c,Lins,Ainsside);
+        Ramba = AmbientConvection(Tamb,a,Lins,Ainsside);
+        if ((Tamb-q*Rambc)-c)*((Tamb-q*Ramba)-a) < 0
+            b = c;
+        else
+            a = c;
+        end
+        toln = (Tamb-q*Rambc)-c;
+    end
+    TinsO = c;
+    %disp(TinsO)
+
+    % outer insulation to inner insulation
+    Rins = InsulationConduction(Lins,Ainsside,kins);
+    Tinsi = TinsO - q*Rins;
+    %disp(Tinsi)
+
+    % inner insulation to air
+    tol = 0.001;
+    toln = tol + 1;
+    a = Tnos;
+    b = Tamb;
+    while abs(toln) > tol
+        c = (a + b)/2;
+        Tair = c;
+        Rairinsc = InterspaceConvectionIns(c,Tinsi,Lins,Ainsside);
+        Rairinsa = InterspaceConvectionIns(a,Tinsi,Lins,Ainsside);
+        if ((Tinsi-q*Rairinsc)-c)*((Tinsi-q*Rairinsa)-a) < 0
+            b = c;
+        else
+            a = c;
+        end
+        toln = (Tinsi-q*Rairinsc)-c;
+    end
+    Tair = c;
+    %disp(Tair)
+
+    % air to outer tank
+    tol = 0.001;
+    toln = tol + 1;
+    a = Tnos;
+    b = Tamb;
+    while abs(toln) > tol
+        c = (a + b)/2;
+        TtankO = c;
+        Rairtankc = InterspaceConvectionTank(Tair,c,Ltank,DtankO);
+        Rairtanka = InterspaceConvectionTank(Tair,a,Ltank,DtankO);
+        if ((Tair-q*Rairtankc)-c)*((Tair-q*Rairtanka)-a) < 0
+            b = c;
+        else
+            a = c;
+        end
+        toln = (Tair-q*Rairtankc)-c;
+    end
+    TtankO = c;
+    %disp(TtankO)
+
+    % outer tank to inner tank
+    Rtank = TankConduction(Lnos,DtankO,Dtanki,ktank);
+    Ttanki = TtankO - q*Rtank;
+    %disp(Ttanki)
+
+    % inner tank to NOS
+    [Rliqtank,Rvaptank] = NOSConvectionTank(Tnos,Ttanki,Lliq,Lvap,Dtanki);
+    Rnos = 1/(1/Rliqtank+1/Rvaptank);
+
+    Ttest = Ttanki - q*Rnos;
+    %disp(Ttest)
+end
+
+%% HEAT TRANSFER
+% transient heat transfer analysis for NOS cooling
+function [Tnos,x,qin,qout] = HeatTransfer(dt,Tnos,Vnos,mnos,Lnos,Dtanki,Tamb,Lins,Ainsside,kins,Ltank,DtankO,ktank,DpipeO,Ti,To,si,so,Lpipe,Hpipe,Dpipei,kpipe,mdot,qnsin,qnsout)
+    % guess q, calculate all temperatures for in and out
+    % compute heat addition rate from ambient to NOS
+    tol = 0.01;
+    toln = tol + 1;
+    qns0 = qnsin;
+    qns1 = qns0-0.1;
+    while abs(toln) > tol
+        qns = qns1 - ((HeatIn(qns1,Tnos,Vnos,mnos,Lnos,Dtanki,Tamb,Lins,Ainsside,kins,Ltank,DtankO,ktank)-Tnos)*(qns0 - qns1)/((HeatIn(qns0,Tnos,Vnos,mnos,Lnos,Dtanki,Tamb,Lins,Ainsside,kins,Ltank,DtankO,ktank)-Tnos) - (HeatIn(qns1,Tnos,Vnos,mnos,Lnos,Dtanki,Tamb,Lins,Ainsside,kins,Ltank,DtankO,ktank)-Tnos)));
+        toln = HeatIn(qns,Tnos,Vnos,mnos,Lnos,Dtanki,Tamb,Lins,Ainsside,kins,Ltank,DtankO,ktank)-Tnos;
+        qns0 = qns1;
+        qns1 = qns;
+    end
+    qin = qns;
+    %disp(qns)
+
+    % compute heat extraction rate from liquid and vapour to refrigerant
+    tol = 0.01;
+    toln = tol + 1;
+    qns0 = qnsout;
+    qns1 = qns0+0.1;
+    while abs(toln) > tol
+        qns = qns1 - ((HeatOut(qns1,Ti,To,si,so,Tnos,Vnos,mnos,Lnos,Dtanki,Lpipe,Hpipe,Dpipei,DpipeO,kpipe,mdot)-Tnos)*(qns0 - qns1)/((HeatOut(qns0,Ti,To,si,so,Tnos,Vnos,mnos,Lnos,Dtanki,Lpipe,Hpipe,Dpipei,DpipeO,kpipe,mdot)-Tnos) - (HeatOut(qns1,Ti,To,si,so,Tnos,Vnos,mnos,Lnos,Dtanki,Lpipe,Hpipe,Dpipei,DpipeO,kpipe,mdot)-Tnos)));
+        toln = HeatOut(qns,Ti,To,si,so,Tnos,Vnos,mnos,Lnos,Dtanki,Lpipe,Hpipe,Dpipei,DpipeO,kpipe,mdot)-Tnos;
+        qns0 = qns1;
+        qns1 = qns;
+    end
+    qout = qns;
+    %disp(qns)
+
+    % compute heat extracted in dt = change in internal energy
+    dQ = qout*dt - qin*dt;
+
+    % compute new internal energy of NOS
+    u0 = py.CoolProp.CoolProp.PropsSI('U','T',Tnos,'D',mnos/Vnos,'CO2');
+    u1 = (u0*mnos - dQ)/mnos;
+
+    % update NOS state at fixed density, new internal energy
+    % assume equilibrium is re-established quickly
+    Tnos = py.CoolProp.CoolProp.PropsSI('T','U',u1,'D',mnos/Vnos,'CO2');
+    x = py.CoolProp.CoolProp.PropsSI('Q','U',u1,'D',mnos/Vnos,'CO2');
+end
+
+
+
+
+
+
+%% MAIN
+% FITNESS FUNCTION - power and time
+%f = 0.5t + 0.5w
+Ttarget = -30+273;
+
+% geometry conditions (from system design)
+Vnos = 23.4/1000; %m^3
+Lnos = 6*12*0.254; %m
+Dnos = (4*Vnos/pi/Lnos)^(1/2);
+
+Lpipe = 10;
+Hpipe = 1;
+DpipeO = 0.5*0.254;
+Dpipei = DpipeO - 0.030*2;
+kpipe = 15;
+
+Ltank = Lnos + 2*1*0.254;
+Dtanki = Dnos;
+DtankO = Dnos + 0.25*0.254*2;
+ktank = 152;
+
+Lins = 0.05;
+Ainsside = Ltank*DtankO;
+kins = 0.033;
+
+% starting conditions
+Tnos = 18+273; %C
+mnos = 11; %kg
+Tamb = 24+273; %C
+mdot = 0.05;
+
+% simulation conditions
+dt = 0.1; %s, time step
+
+% initial iteration guess
+Pevap = 126863.5; %pa
+Pcond = 226863.5; %pa
+
+% EVAPORATION
+[s,h,T] = RefrigerationCycle(Pevap,Pcond);
+To = T(4);
+Ti = T(3);
+so = s(4);
+si = s(3);
+
+t = 0;
+qnsin = 25;
+qnsout = 45;
+while Tnos > Ttarget
+    [Tnos,x,qin,qout] = HeatTransfer(dt,Tnos,Vnos,mnos,Lnos,Dtanki,Tamb,Lins,Ainsside,kins,Ltank,DtankO,ktank,DpipeO,Ti,To,si,so,Lpipe,Hpipe,Dpipei,kpipe,mdot,qnsin,qnsout);
+    qnsin = qin;
+    qnsout = qout;
+    t = t+dt;
+    fprintf('Tnos = %f, x = %f, t = %f\n', Tnos, x, t);
+end
+
+
+%% TODO
+% check refrigerant convection
+% update refrigerant convection with pressure drop
+% update vertical cylinder assumption if needed (check BL assumption)
+% update for correct refrigerant
+% update refrigerant flow models file
+% update for nitrous data
+% optimize runtime
+% correct thermodynamics of refrigeration cycle for pressure drop
+% add transient zone for reynolds number
+% advice on variable mass flow rate
